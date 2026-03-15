@@ -1,0 +1,330 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// mcpConnect creates a transport, sends initialize + initialized, returns the transport.
+func mcpConnect(server *ServerConfig, authToken string) (Transport, error) {
+	var transport Transport
+	var err error
+
+	switch server.Transport {
+	case "stdio":
+		transport, err = NewStdioTransport(server.Command, server.Args)
+	case "streamable-http":
+		transport = NewHTTPTransport(server.URL, authToken)
+	default:
+		return nil, fmt.Errorf("unsupported transport %q", server.Transport)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("create transport: %w", err)
+	}
+
+	// MCP initialize handshake
+	initResp, err := transport.Send(jsonrpcRequest{
+		JSONRPC: jsonrpcVersion,
+		ID:      nextID(),
+		Method:  "initialize",
+		Params: initializeParams{
+			ProtocolVersion: "2025-03-26",
+			Capabilities:    clientCapabilities{},
+			ClientInfo: clientInfo{
+				Name:    "mcp-cli",
+				Version: Version,
+			},
+		},
+	})
+	if err != nil {
+		transport.Close()
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+	if initResp.Error != nil {
+		transport.Close()
+		return nil, fmt.Errorf("initialize: %s", initResp.Error.Message)
+	}
+
+	// Send initialized notification
+	if err := transport.Notify(jsonrpcNotification{
+		JSONRPC: jsonrpcVersion,
+		Method:  "notifications/initialized",
+	}); err != nil {
+		transport.Close()
+		return nil, fmt.Errorf("send initialized notification: %w", err)
+	}
+
+	return transport, nil
+}
+
+// discoverTools connects to a server, lists tools, and returns them.
+func discoverTools(server *ServerConfig, authToken string) ([]toolOutput, error) {
+	transport, err := mcpConnect(server, authToken)
+	if err != nil {
+		return nil, err
+	}
+	defer transport.Close()
+
+	return listAllTools(transport, server.Name)
+}
+
+// listAllTools fetches all tools from a connected transport, handling pagination.
+func listAllTools(transport Transport, serverName string) ([]toolOutput, error) {
+	var allTools []toolOutput
+	var cursor string
+	const maxPages = 100
+
+	for page := 0; page < maxPages; page++ {
+		var params interface{}
+		if cursor != "" {
+			params = toolsListParams{Cursor: cursor}
+		}
+
+		resp, err := transport.Send(jsonrpcRequest{
+			JSONRPC: jsonrpcVersion,
+			ID:      nextID(),
+			Method:  "tools/list",
+			Params:  params,
+		})
+
+		if err != nil {
+			return nil, fmt.Errorf("list tools: %w", err)
+		}
+		if resp.Error != nil {
+			return nil, fmt.Errorf("list tools: %s", resp.Error.Message)
+		}
+
+		var result toolsListResult
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return nil, fmt.Errorf("unmarshal tools: %w", err)
+		}
+
+		for _, t := range result.Tools {
+			allTools = append(allTools, toolOutput{
+				Server:      serverName,
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			})
+		}
+
+		if result.NextCursor == "" {
+			break
+		}
+		cursor = result.NextCursor
+	}
+
+	if cursor != "" {
+		logStderr("warning: tools list truncated after %d pages", maxPages)
+	}
+
+	return allTools, nil
+}
+
+// mcpPing sends a ping request to verify server liveness.
+func mcpPing(transport Transport) error {
+	resp, err := transport.Send(jsonrpcRequest{
+		JSONRPC: jsonrpcVersion,
+		ID:      nextID(),
+		Method:  "ping",
+	})
+	if err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("ping: %s", resp.Error.Message)
+	}
+	return nil
+}
+
+// getToolsForServer returns tools for a server, using cache if fresh.
+func getToolsForServer(server *ServerConfig, refresh bool) ([]toolOutput, error) {
+	// Try cache first (unless refresh requested)
+	if !refresh {
+		cached, err := loadCachedTools(server.Name)
+		if err != nil {
+			logStderr("warning: cache read failed: %v", err)
+		}
+		if cached != nil {
+			return cached, nil
+		}
+	}
+
+	// Get auth token if available
+	authToken, err := getAuthToken(server.Name)
+	if err != nil {
+		logStderr("warning: auth token load failed: %v", err)
+	}
+
+	// Discover fresh
+	tools, err := discoverTools(server, authToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the results
+	if cacheErr := saveCachedTools(server.Name, tools); cacheErr != nil {
+		logStderr("warning: cache write failed: %v", cacheErr)
+	}
+
+	return tools, nil
+}
+
+// getAuthToken loads and optionally refreshes the auth token for a server.
+// Uses file locking to prevent concurrent refresh races across processes.
+func getAuthToken(name string) (string, error) {
+	tokens, err := loadAuth(name)
+	if err != nil {
+		return "", err
+	}
+	if tokens == nil {
+		return "", nil
+	}
+
+	// Check if token needs refresh
+	if tokens.ExpiresAt > 0 && tokens.ExpiresAt-30 < time.Now().Unix() {
+		if tokens.RefreshToken != "" && tokens.TokenURL != "" {
+			refreshed, err := refreshTokenWithLock(name, tokens)
+			if err != nil {
+				logStderr("warning: token refresh failed: %v", err)
+				// Fall through and try the expired token anyway
+			} else {
+				return refreshed.AccessToken, nil
+			}
+		}
+	}
+
+	return tokens.AccessToken, nil
+}
+
+// refreshTokenWithLock acquires an exclusive file lock before refreshing,
+// then re-checks whether another process already refreshed the token.
+func refreshTokenWithLock(name string, tokens *AuthTokens) (*AuthTokens, error) {
+	unlock, err := lockFile(authPath(name))
+	if err != nil {
+		return nil, fmt.Errorf("acquire lock: %w", err)
+	}
+	defer unlock()
+
+	// Re-read after acquiring lock — another process may have refreshed already
+	fresh, err := loadAuth(name)
+	if err != nil {
+		return nil, err
+	}
+	if fresh != nil && fresh.ExpiresAt > 0 && fresh.ExpiresAt-30 >= time.Now().Unix() {
+		return fresh, nil
+	}
+
+	logStderr("token expired, refreshing...")
+	refreshed, err := refreshOAuthToken(tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := saveAuth(name, refreshed); err != nil {
+		logStderr("warning: failed to save refreshed token: %v", err)
+	}
+
+	return refreshed, nil
+}
+
+// cmdTools handles the `mcp tools` command.
+func cmdTools(args []string) error {
+	var serverFilter, query string
+	var refresh bool
+
+	// Parse args: mcp tools [server] [--query <search>] [--refresh]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--query", "-q":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--query requires a value")
+			}
+			i++
+			query = args[i]
+		case "--refresh":
+			refresh = true
+		default:
+			if serverFilter == "" {
+				serverFilter = args[i]
+			}
+		}
+	}
+
+	if serverFilter != "" {
+		if err := validateServerName(serverFilter); err != nil {
+			return err
+		}
+	}
+
+	servers, err := loadServers()
+	if err != nil {
+		return err
+	}
+
+	if len(servers) == 0 {
+		return outputJSON([]toolOutput{})
+	}
+
+	var (
+		allTools []toolOutput
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+	)
+	sem := make(chan struct{}, 5)
+	for _, s := range servers {
+		if serverFilter != "" && s.Name != serverFilter {
+			continue
+		}
+		if !s.IsEnabled() {
+			continue
+		}
+		s := s
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			tools, err := getToolsForServer(&s, refresh)
+			if err != nil {
+				logStderr("warning: failed to get tools from %q: %v", s.Name, err)
+				return
+			}
+			mu.Lock()
+			allTools = append(allTools, tools...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	sort.Slice(allTools, func(i, j int) bool {
+		if allTools[i].Server != allTools[j].Server {
+			return allTools[i].Server < allTools[j].Server
+		}
+		return allTools[i].Name < allTools[j].Name
+	})
+
+	// Apply query filter
+	if query != "" {
+		q := strings.ToLower(query)
+		var filtered []toolOutput
+		for _, t := range allTools {
+			if strings.Contains(strings.ToLower(t.Name), q) ||
+				strings.Contains(strings.ToLower(t.Description), q) {
+				filtered = append(filtered, t)
+			}
+		}
+		allTools = filtered
+	}
+
+	if allTools == nil {
+		allTools = []toolOutput{}
+	}
+
+	return outputJSON(allTools)
+}
