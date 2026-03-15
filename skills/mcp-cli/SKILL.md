@@ -53,8 +53,8 @@ mcp call <server> <tool> --stream --params '{"key": "value"}'
 
 ### Authenticate
 ```bash
-# OAuth (on sprite — outputs auth URL for user)
-mcp auth <name> --callback-url https://heybertram.com
+# OAuth (outputs auth URL for user)
+mcp auth <name> --callback-url <your-callback-url>
 
 # Manual token
 MCP_AUTH_TOKEN=<bearer-token> mcp auth <name>
@@ -74,7 +74,7 @@ mcp remove <name>
 
 1. First check what servers are available: `mcp servers`
 2. If the user asks to connect a new MCP server: `mcp add <name> <url>`
-3. If auth is needed: `mcp auth <name> --callback-url https://heybertram.com` — present the `auth_url` from the JSON output to the user
+3. If auth is needed: `mcp auth <name> --callback-url <your-callback-url>` — present the `auth_url` from the JSON output to the user
 4. Discover tools: `mcp tools <server>` — review available tools
 5. Call tools as needed: `mcp call <server> <tool> --params '{...}'`
 
