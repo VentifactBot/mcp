@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -305,22 +306,16 @@ func discoverOAuth(mcpServerURL string) (string, *authServerMetadata, error) {
 
 	resource := parsedURL.String()
 
-	// Try /.well-known/oauth-protected-resource
-	wellKnownURL := buildWellKnownURL(parsedURL, "oauth-protected-resource")
-
-	resp, err := client.Get(wellKnownURL)
-	if err != nil {
-		return "", nil, fmt.Errorf("fetch protected resource metadata: %w", err)
+	// Try /.well-known/oauth-protected-resource (with path suffix per RFC 8615,
+	// then fall back to root if the server doesn't use path-based discovery).
+	body, err := fetchWellKnown(client, buildWellKnownURL(parsedURL, "oauth-protected-resource"))
+	if err != nil && parsedURL.Path != "" && parsedURL.Path != "/" {
+		rootURL := *parsedURL
+		rootURL.Path = ""
+		body, err = fetchWellKnown(client, buildWellKnownURL(&rootURL, "oauth-protected-resource"))
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("protected resource metadata returned %d (server may not support OAuth)", resp.StatusCode)
-	}
-
-	body, err := readResponseBody(resp.Body)
 	if err != nil {
-		return "", nil, fmt.Errorf("read response: %w", err)
+		return "", nil, fmt.Errorf("protected resource metadata: %w", err)
 	}
 
 	var prm protectedResourceMetadata
@@ -357,21 +352,14 @@ func fetchAuthServerMetadata(client *http.Client, authServerURL string) (*authSe
 		return nil, fmt.Errorf("parse auth server URL: %w", err)
 	}
 
-	wellKnownURL := buildWellKnownURL(parsed, "oauth-authorization-server")
-
-	resp, err := client.Get(wellKnownURL)
-	if err != nil {
-		return nil, fmt.Errorf("fetch auth server metadata: %w", err)
+	body, err := fetchWellKnown(client, buildWellKnownURL(parsed, "oauth-authorization-server"))
+	if err != nil && parsed.Path != "" && parsed.Path != "/" {
+		rootURL := *parsed
+		rootURL.Path = ""
+		body, err = fetchWellKnown(client, buildWellKnownURL(&rootURL, "oauth-authorization-server"))
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("auth server metadata returned %d", resp.StatusCode)
-	}
-
-	body, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("auth server metadata: %w", err)
 	}
 
 	var meta authServerMetadata
@@ -568,6 +556,20 @@ func buildRelayRedirectURI(callbackURL, agentID, nonce string) string {
 	t := time.Now().Unix()
 	return fmt.Sprintf("%s/api/oauth/relay/%s/%s/callback?t=%d",
 		strings.TrimRight(callbackURL, "/"), agentID, nonce, t)
+}
+
+// fetchWellKnown GETs a well-known URL and returns the body on 200, or an error.
+func fetchWellKnown(client *http.Client, wellKnownURL string) ([]byte, error) {
+	resp, err := client.Get(wellKnownURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", wellKnownURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("%s returned %d", wellKnownURL, resp.StatusCode)
+	}
+	return readResponseBody(resp.Body)
 }
 
 // buildWellKnownURL constructs a well-known URL per RFC 8615.
