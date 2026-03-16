@@ -181,14 +181,21 @@ func cmdAdd(args []string) error {
 }
 
 func addServer(server ServerConfig, authToken string) error {
-	logStderr("connecting to %s...", server.Name)
-	tools, err := discoverTools(&server, authToken)
-	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
-	}
 	if err := addServerConfig(server); err != nil {
 		return err
 	}
+
+	logStderr("connecting to %s...", server.Name)
+	tools, err := discoverTools(&server, authToken)
+	if err != nil {
+		logStderr("warning: could not discover tools: %v", err)
+		if server.Transport == "streamable-http" {
+			logStderr("hint: run `mcp auth %s` to authenticate, then `mcp tools %s --refresh`", server.Name, server.Name)
+		}
+		logStderr("added server %q (%s)", server.Name, server.Transport)
+		return nil
+	}
+
 	if err := saveCachedTools(server.Name, tools); err != nil {
 		logStderr("warning: cache write failed: %v", err)
 	}
