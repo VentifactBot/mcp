@@ -15,9 +15,12 @@ func TestParseInputSchema_Basic(t *testing.T) {
 		"required": ["query"]
 	}`)
 
-	params := parseInputSchema(schema)
+	params, skipped := parseInputSchema(schema)
 	if len(params) != 2 {
 		t.Fatalf("expected 2 params, got %d", len(params))
+	}
+	if skipped != 0 {
+		t.Errorf("expected 0 skipped, got %d", skipped)
 	}
 
 	// Sorted by name: limit, query
@@ -52,9 +55,12 @@ func TestParseInputSchema_SkipsComplexTypes(t *testing.T) {
 		}
 	}`)
 
-	params := parseInputSchema(schema)
+	params, skipped := parseInputSchema(schema)
 	if len(params) != 1 {
 		t.Fatalf("expected 1 param (complex types skipped), got %d", len(params))
+	}
+	if skipped != 2 {
+		t.Errorf("expected 2 skipped, got %d", skipped)
 	}
 	if params[0].Name != "name" {
 		t.Errorf("expected 'name', got %q", params[0].Name)
@@ -69,7 +75,7 @@ func TestParseInputSchema_WithDefaults(t *testing.T) {
 		}
 	}`)
 
-	params := parseInputSchema(schema)
+	params, _ := parseInputSchema(schema)
 	if len(params) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(params))
 	}
@@ -90,7 +96,7 @@ func TestParseInputSchema_WithEnum(t *testing.T) {
 		}
 	}`)
 
-	params := parseInputSchema(schema)
+	params, _ := parseInputSchema(schema)
 	if len(params) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(params))
 	}
@@ -100,14 +106,20 @@ func TestParseInputSchema_WithEnum(t *testing.T) {
 }
 
 func TestParseInputSchema_Empty(t *testing.T) {
-	params := parseInputSchema(nil)
+	params, skipped := parseInputSchema(nil)
 	if len(params) != 0 {
 		t.Errorf("expected 0 params for nil schema, got %d", len(params))
 	}
+	if skipped != 0 {
+		t.Errorf("expected 0 skipped for nil schema, got %d", skipped)
+	}
 
-	params = parseInputSchema(json.RawMessage(`{}`))
+	params, skipped = parseInputSchema(json.RawMessage(`{}`))
 	if len(params) != 0 {
 		t.Errorf("expected 0 params for empty schema, got %d", len(params))
+	}
+	if skipped != 0 {
+		t.Errorf("expected 0 skipped for empty schema, got %d", skipped)
 	}
 }
 
@@ -122,7 +134,7 @@ func TestParseInputSchema_AllTypes(t *testing.T) {
 		}
 	}`)
 
-	params := parseInputSchema(schema)
+	params, _ := parseInputSchema(schema)
 	if len(params) != 4 {
 		t.Fatalf("expected 4 params, got %d", len(params))
 	}

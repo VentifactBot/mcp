@@ -352,44 +352,32 @@ func printToolsHuman(tools []toolOutput) error {
 		return nil
 	}
 
-	// Group tools by server (already sorted by server, then name).
-	type group struct {
-		server string
-		tools  []toolOutput
-	}
-	var groups []group
+	// Print tools grouped by server (already sorted by server, then name).
+	lastServer := ""
+	serverCount := 0
 	for _, t := range tools {
-		if len(groups) == 0 || groups[len(groups)-1].server != t.Server {
-			groups = append(groups, group{server: t.Server})
-		}
-		groups[len(groups)-1].tools = append(groups[len(groups)-1].tools, t)
-	}
-
-	for gi, g := range groups {
-		if gi > 0 {
-			fmt.Fprintln(os.Stdout)
-		}
-
-		noun := "tools"
-		if len(g.tools) == 1 {
-			noun = "tool"
-		}
-		fmt.Fprintf(os.Stdout, "%s (%d %s)\n", g.server, len(g.tools), noun)
-
-		// Find max tool name length for alignment.
-		maxNameLen := 0
-		for _, t := range g.tools {
-			if len(t.Name) > maxNameLen {
-				maxNameLen = len(t.Name)
+		if t.Server != lastServer {
+			if lastServer != "" {
+				fmt.Fprintln(os.Stdout)
 			}
-		}
-
-		for _, t := range g.tools {
-			if t.Description != "" {
-				fmt.Fprintf(os.Stdout, "  %-*s  %s\n", maxNameLen, t.Name, t.Description)
-			} else {
-				fmt.Fprintf(os.Stdout, "  %s\n", t.Name)
+			// Count tools for this server.
+			serverCount = 0
+			for _, u := range tools {
+				if u.Server == t.Server {
+					serverCount++
+				}
 			}
+			noun := "tools"
+			if serverCount == 1 {
+				noun = "tool"
+			}
+			fmt.Fprintf(os.Stdout, "%s (%d %s)\n", t.Server, serverCount, noun)
+			lastServer = t.Server
+		}
+		if t.Description != "" {
+			fmt.Fprintf(os.Stdout, "  %-30s  %s\n", t.Name, t.Description)
+		} else {
+			fmt.Fprintf(os.Stdout, "  %s\n", t.Name)
 		}
 	}
 

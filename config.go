@@ -15,10 +15,18 @@ const cacheTTL = 10 * time.Minute
 const pendingAuthTTL = 10 * time.Minute
 
 var validServerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+var validToolName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$`)
 
 func validateServerName(name string) error {
 	if !validServerName.MatchString(name) {
 		return fmt.Errorf("invalid server name %q: must start with alphanumeric and contain only alphanumerics, dots, hyphens, or underscores", name)
+	}
+	return nil
+}
+
+func validateToolName(name string) error {
+	if !validToolName.MatchString(name) {
+		return fmt.Errorf("invalid tool name %q: must start with alphanumeric and contain only alphanumerics, dots, hyphens, underscores, colons, or slashes", name)
 	}
 	return nil
 }
@@ -371,6 +379,19 @@ func loadCachedTools(name string) ([]toolOutput, error) {
 		return nil, nil
 	}
 
+	return cache.Tools, nil
+}
+
+// loadCachedToolsStale loads cached tools ignoring TTL. Returns nil if no cache file exists.
+func loadCachedToolsStale(name string) ([]toolOutput, error) {
+	var cache ToolCache
+	found, err := readJSON(cachePath(name), &cache)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
 	return cache.Tools, nil
 }
 

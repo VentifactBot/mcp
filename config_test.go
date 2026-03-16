@@ -356,3 +356,60 @@ func TestToolCacheSaveLoadTTL(t *testing.T) {
 		t.Error("expected nil for expired cache")
 	}
 }
+
+func TestLoadCachedToolsStale(t *testing.T) {
+	setupTestConfigDir(t)
+
+	// Missing cache returns nil.
+	tools, err := loadCachedToolsStale("missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools != nil {
+		t.Fatal("expected nil for missing cache")
+	}
+
+	// Write an expired cache (old timestamp).
+	toolList := []toolOutput{
+		{Server: "test", Name: "tool1", Description: "desc1"},
+	}
+	cache := ToolCache{
+		Tools:    toolList,
+		CachedAt: time.Now().Add(-20 * time.Minute).Unix(),
+	}
+	writeJSON(cachePath("stale"), cache)
+
+	// loadCachedTools returns nil (expired).
+	fresh, err := loadCachedTools("stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh != nil {
+		t.Error("expected nil from loadCachedTools for expired cache")
+	}
+
+	// loadCachedToolsStale returns the tools despite TTL.
+	stale, err := loadCachedToolsStale("stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || stale[0].Name != "tool1" {
+		t.Errorf("expected stale cache to return tool1, got %+v", stale)
+	}
+}
+
+func TestValidateToolName(t *testing.T) {
+	valid := []string{"echo", "my-tool", "mcp__server__tool", "ns/tool", "a.b.c", "tool:action"}
+	for _, name := range valid {
+		if err := validateToolName(name); err != nil {
+			t.Errorf("expected %q to be valid, got: %v", name, err)
+		}
+	}
+
+	invalid := []string{"", "-tool", ".tool", "/tool", ":tool", "tool name", "tool;rm", "tool@host"}
+	for _, name := range invalid {
+		if err := validateToolName(name); err == nil {
+			t.Errorf("expected %q to be invalid", name)
+		}
+	}
+}

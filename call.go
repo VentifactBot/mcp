@@ -32,6 +32,9 @@ func cmdCall(args []string) error {
 		return err
 	}
 	toolName := args[1]
+	if err := validateToolName(toolName); err != nil {
+		return err
+	}
 	var paramsStr string
 	stream := false
 	showHelp := false
@@ -62,15 +65,19 @@ func cmdCall(args []string) error {
 		case "--help", "-h":
 			showHelp = true
 		default:
-			if strings.HasPrefix(args[i], "--") {
-				key := strings.TrimPrefix(args[i], "--")
-				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
-					// Boolean flag (no value follows or next arg is also a flag)
-					dynamicFlags[key] = "true"
-				} else {
-					i++
-					dynamicFlags[key] = args[i]
-				}
+			if !strings.HasPrefix(args[i], "--") {
+				return fmt.Errorf("unexpected argument %q (use --<param> for tool parameters)", args[i])
+			}
+			key := strings.TrimPrefix(args[i], "--")
+			// Support --param=value syntax.
+			if eqIdx := strings.IndexByte(key, '='); eqIdx >= 0 {
+				dynamicFlags[key[:eqIdx]] = key[eqIdx+1:]
+			} else if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				// Boolean flag (no value follows or next arg is also a flag)
+				dynamicFlags[key] = "true"
+			} else {
+				i++
+				dynamicFlags[key] = args[i]
 			}
 		}
 	}
@@ -112,6 +119,7 @@ func cmdCall(args []string) error {
 		schema, err := getToolSchema(serverName, toolName)
 		if err != nil {
 			// No cached schema — pass all values as strings.
+			logStderr("warning: no cached schema for %s/%s; flags will be passed as strings (run `mcp tools %s --refresh` to update)", serverName, toolName, serverName)
 			for k, v := range dynamicFlags {
 				params[k] = v
 			}
@@ -232,14 +240,17 @@ func renderToolCallResult(result toolCallResult) callOutput {
 
 // showToolHelp prints help for a specific tool, including its description and parameters.
 func showToolHelp(serverName, toolName string) error {
-	server, err := getServerConfig(serverName)
-	if err != nil {
-		return err
-	}
-
-	tools, err := getToolsForServer(server, false)
-	if err != nil {
-		return fmt.Errorf("cannot discover tools: %w", err)
+	// Try stale cache first to avoid connecting to the server.
+	tools, _ := loadCachedToolsStale(serverName)
+	if tools == nil {
+		server, err := getServerConfig(serverName)
+		if err != nil {
+			return err
+		}
+		tools, err = getToolsForServer(server, false)
+		if err != nil {
+			return fmt.Errorf("cannot discover tools: %w", err)
+		}
 	}
 
 	var found *toolOutput
@@ -260,9 +271,13 @@ func showToolHelp(serverName, toolName string) error {
 	fmt.Fprintf(os.Stderr, "%s — %s\n", toolName, desc)
 	fmt.Fprintf(os.Stderr, "  server: %s\n", serverName)
 
-	params := parseInputSchema(found.InputSchema)
+	params, skipped := parseInputSchema(found.InputSchema)
 	if len(params) == 0 {
-		fmt.Fprintln(os.Stderr, "\nNo parameters.")
+		if skipped > 0 {
+			fmt.Fprintf(os.Stderr, "\nNo flag parameters (%d complex parameter(s) must be passed via --params JSON).\n", skipped)
+		} else {
+			fmt.Fprintln(os.Stderr, "\nNo parameters.")
+		}
 		return nil
 	}
 
@@ -305,6 +320,10 @@ func showToolHelp(serverName, toolName string) error {
 			line += " (" + strings.Join(annotations, ", ") + ")"
 		}
 		fmt.Fprintln(os.Stderr, line)
+	}
+
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "\n  (%d complex parameter(s) must be passed via --params JSON)\n", skipped)
 	}
 
 	return nil

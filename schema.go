@@ -18,10 +18,11 @@ type toolParam struct {
 }
 
 // parseInputSchema extracts flat parameters from a JSON Schema inputSchema.
-// Complex types (object, array) are skipped. Returns sorted by name.
-func parseInputSchema(raw json.RawMessage) []toolParam {
+// Complex types (object, array) are skipped. Returns params sorted by name
+// and the count of skipped complex properties.
+func parseInputSchema(raw json.RawMessage) ([]toolParam, int) {
 	if len(raw) == 0 {
-		return nil
+		return nil, 0
 	}
 
 	var schema struct {
@@ -30,11 +31,11 @@ func parseInputSchema(raw json.RawMessage) []toolParam {
 		Required   []string                          `json:"required"`
 	}
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil
+		return nil, 0
 	}
 
 	if schema.Properties == nil {
-		return nil
+		return nil, 0
 	}
 
 	requiredSet := make(map[string]bool, len(schema.Required))
@@ -43,9 +44,11 @@ func parseInputSchema(raw json.RawMessage) []toolParam {
 	}
 
 	var params []toolParam
+	var skipped int
 	for name, prop := range schema.Properties {
 		typ, _ := prop["type"].(string)
 		if typ == "object" || typ == "array" {
+			skipped++
 			continue
 		}
 		if typ == "" {
@@ -79,7 +82,7 @@ func parseInputSchema(raw json.RawMessage) []toolParam {
 		return params[i].Name < params[j].Name
 	})
 
-	return params
+	return params, skipped
 }
 
 // coerceDynamicFlags converts string flag values to proper Go types based on schema.
@@ -128,7 +131,8 @@ func getToolSchema(serverName, toolName string) ([]toolParam, error) {
 	}
 	for _, t := range cached {
 		if t.Name == toolName {
-			return parseInputSchema(t.InputSchema), nil
+			params, _ := parseInputSchema(t.InputSchema)
+			return params, nil
 		}
 	}
 	return nil, fmt.Errorf("tool %q not found in cache for server %q", toolName, serverName)

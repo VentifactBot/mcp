@@ -7,6 +7,49 @@ import (
 	"testing"
 )
 
+func TestCmdCall_ParamEqualsValue(t *testing.T) {
+	// We can't easily test the full cmdCall (needs server), so test the flag
+	// parsing logic by replicating the loop from cmdCall.
+	args := []string{"server", "tool", "--msg=hello world", "--count=42", "--flag"}
+	dynamicFlags := make(map[string]string)
+
+	for i := 2; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "--") {
+			t.Fatalf("unexpected positional arg %q", arg)
+		}
+		key := strings.TrimPrefix(arg, "--")
+		if eqIdx := strings.IndexByte(key, '='); eqIdx >= 0 {
+			dynamicFlags[key[:eqIdx]] = key[eqIdx+1:]
+		} else if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+			dynamicFlags[key] = "true"
+		} else {
+			i++
+			dynamicFlags[key] = args[i]
+		}
+	}
+
+	if dynamicFlags["msg"] != "hello world" {
+		t.Errorf("expected msg='hello world', got %q", dynamicFlags["msg"])
+	}
+	if dynamicFlags["count"] != "42" {
+		t.Errorf("expected count='42', got %q", dynamicFlags["count"])
+	}
+	if dynamicFlags["flag"] != "true" {
+		t.Errorf("expected flag='true', got %q", dynamicFlags["flag"])
+	}
+}
+
+func TestCmdCall_UnexpectedPositionalArg(t *testing.T) {
+	err := cmdCall([]string{"server", "tool", "badarg"})
+	if err == nil {
+		t.Fatal("expected error for positional arg")
+	}
+	if !strings.Contains(err.Error(), "unexpected argument") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestRenderContent_TextBlock(t *testing.T) {
 	result := toolCallResult{
 		Content: []contentBlock{{Type: "text", Text: "hello world"}},
