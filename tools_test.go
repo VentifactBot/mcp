@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -185,5 +188,87 @@ func TestMcpPing_TransportError(t *testing.T) {
 	err := mcpPing(transport)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestPrintToolsHuman_SingleServer(t *testing.T) {
+	tools := []toolOutput{
+		{Server: "my-server", Name: "search", Description: "Search the knowledge base"},
+		{Server: "my-server", Name: "get-doc", Description: "Get a document"},
+	}
+
+	// Capture stdout
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := printToolsHuman(tools)
+	w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := io.ReadAll(r)
+	output := string(data)
+
+	if !strings.Contains(output, "my-server (2 tools)") {
+		t.Errorf("expected server header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "search") || !strings.Contains(output, "get-doc") {
+		t.Errorf("expected tool names, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Search the knowledge base") {
+		t.Errorf("expected descriptions, got:\n%s", output)
+	}
+}
+
+func TestPrintToolsHuman_MultiServer(t *testing.T) {
+	tools := []toolOutput{
+		{Server: "alpha", Name: "tool1", Description: "First"},
+		{Server: "beta", Name: "tool2", Description: "Second"},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := printToolsHuman(tools)
+	w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := io.ReadAll(r)
+	output := string(data)
+
+	if !strings.Contains(output, "alpha (1 tool)") {
+		t.Errorf("expected 'alpha (1 tool)', got:\n%s", output)
+	}
+	if !strings.Contains(output, "beta (1 tool)") {
+		t.Errorf("expected 'beta (1 tool)', got:\n%s", output)
+	}
+}
+
+func TestPrintToolsHuman_Empty(t *testing.T) {
+	// Empty list prints to stderr, not stdout.
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	err := printToolsHuman(nil)
+	w.Close()
+	os.Stderr = old
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := io.ReadAll(r)
+	if !strings.Contains(string(data), "No tools found") {
+		t.Errorf("expected 'No tools found', got %q", string(data))
 	}
 }

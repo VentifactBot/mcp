@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -236,9 +237,9 @@ func refreshTokenWithLock(name string, tokens *AuthTokens) (*AuthTokens, error) 
 // cmdTools handles the `mcp tools` command.
 func cmdTools(args []string) error {
 	var serverFilter, query string
-	var refresh bool
+	var refresh, jsonOutput bool
 
-	// Parse args: mcp tools [server] [--query <search>] [--refresh]
+	// Parse args: mcp tools [server] [--query <search>] [--refresh] [--json]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--query", "-q":
@@ -249,6 +250,8 @@ func cmdTools(args []string) error {
 			query = args[i]
 		case "--refresh":
 			refresh = true
+		case "--json":
+			jsonOutput = true
 		default:
 			if serverFilter == "" {
 				serverFilter = args[i]
@@ -326,5 +329,69 @@ func cmdTools(args []string) error {
 		allTools = []toolOutput{}
 	}
 
-	return outputJSON(allTools)
+	// Default to human-readable for TTY, JSON for pipes.
+	if jsonOutput || !isStdoutTTY() {
+		return outputJSON(allTools)
+	}
+	return printToolsHuman(allTools)
+}
+
+// isStdoutTTY returns true if stdout is a terminal.
+func isStdoutTTY() bool {
+	stat, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+// printToolsHuman formats tools as CLI-style help text grouped by server.
+func printToolsHuman(tools []toolOutput) error {
+	if len(tools) == 0 {
+		fmt.Fprintln(os.Stderr, "No tools found.")
+		return nil
+	}
+
+	// Group tools by server (already sorted by server, then name).
+	type group struct {
+		server string
+		tools  []toolOutput
+	}
+	var groups []group
+	for _, t := range tools {
+		if len(groups) == 0 || groups[len(groups)-1].server != t.Server {
+			groups = append(groups, group{server: t.Server})
+		}
+		groups[len(groups)-1].tools = append(groups[len(groups)-1].tools, t)
+	}
+
+	for gi, g := range groups {
+		if gi > 0 {
+			fmt.Fprintln(os.Stdout)
+		}
+
+		noun := "tools"
+		if len(g.tools) == 1 {
+			noun = "tool"
+		}
+		fmt.Fprintf(os.Stdout, "%s (%d %s)\n", g.server, len(g.tools), noun)
+
+		// Find max tool name length for alignment.
+		maxNameLen := 0
+		for _, t := range g.tools {
+			if len(t.Name) > maxNameLen {
+				maxNameLen = len(t.Name)
+			}
+		}
+
+		for _, t := range g.tools {
+			if t.Description != "" {
+				fmt.Fprintf(os.Stdout, "  %-*s  %s\n", maxNameLen, t.Name, t.Description)
+			} else {
+				fmt.Fprintf(os.Stdout, "  %s\n", t.Name)
+			}
+		}
+	}
+
+	return nil
 }

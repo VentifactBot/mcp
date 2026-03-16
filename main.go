@@ -80,9 +80,16 @@ Commands:
   version                        Show version
 
 Call flags:
-  --params '{"key":"val"}'       Tool parameters (or pipe via stdin)
+  --<param> <value>              Tool parameter (generated from schema)
+  --params '{"key":"val"}'       Tool parameters as JSON (or pipe via stdin)
   --stream                       Stream progress events as NDJSON
   --max-output N                 Truncate output to N chars (default 30000)
+  --help                         Show tool description and parameters
+
+Tools flags:
+  --query <q>                    Filter tools by name/description
+  --refresh                      Force refresh from server
+  --json                         Output as JSON (default: human-readable)
 
 Auth flags:
   --callback-url <url>           Use relay mode (for sprites)

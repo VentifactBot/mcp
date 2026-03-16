@@ -20,10 +20,11 @@ var errToolFailed = errors.New("tool returned error")
 // defaultMaxOutput caps tool output to stay within LLM token budgets.
 const defaultMaxOutput = 30_000
 
-// cmdCall handles the `mcp call <server> <tool> [--params '{}'] [--stream] [--max-output N]` command.
+// cmdCall handles the `mcp call <server> <tool> [flags]` command.
+// Tool parameters can be passed as individual --flags or via --params JSON.
 func cmdCall(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: mcp call <server> <tool> [--params '{...}'] [--stream] [--max-output N]")
+		return fmt.Errorf("usage: mcp call <server> <tool> [--<param> <value> ...] [--params '{...}'] [--stream] [--max-output N]")
 	}
 
 	serverName := args[0]
@@ -33,9 +34,11 @@ func cmdCall(args []string) error {
 	toolName := args[1]
 	var paramsStr string
 	stream := false
+	showHelp := false
 	maxOutput := defaultMaxOutput
+	dynamicFlags := make(map[string]string)
 
-	// Parse remaining args
+	// Parse remaining args: known flags first, then collect dynamic flags.
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--params", "-p":
@@ -56,11 +59,34 @@ func cmdCall(args []string) error {
 				return fmt.Errorf("invalid --max-output value: %s", args[i])
 			}
 			maxOutput = n
+		case "--help", "-h":
+			showHelp = true
+		default:
+			if strings.HasPrefix(args[i], "--") {
+				key := strings.TrimPrefix(args[i], "--")
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+					// Boolean flag (no value follows or next arg is also a flag)
+					dynamicFlags[key] = "true"
+				} else {
+					i++
+					dynamicFlags[key] = args[i]
+				}
+			}
 		}
 	}
 
+	// Handle --help: show tool description and available parameters.
+	if showHelp {
+		return showToolHelp(serverName, toolName)
+	}
+
+	// Reject combining --params with dynamic flags.
+	if paramsStr != "" && len(dynamicFlags) > 0 {
+		return fmt.Errorf("cannot combine --params with individual parameter flags")
+	}
+
 	// If no params from flag, try stdin
-	if paramsStr == "" {
+	if paramsStr == "" && len(dynamicFlags) == 0 {
 		stat, _ := os.Stdin.Stat()
 		if (stat.Mode() & os.ModeCharDevice) == 0 {
 			const maxStdinSize = 10 << 20 // 10 MB — generous for piped JSON params
@@ -76,11 +102,25 @@ func cmdCall(args []string) error {
 		}
 	}
 
-	// Parse params
+	// Parse params from JSON or dynamic flags.
 	params := make(map[string]interface{})
 	if paramsStr != "" {
 		if err := json.Unmarshal([]byte(paramsStr), &params); err != nil {
 			return fmt.Errorf("invalid params JSON: %w", err)
+		}
+	} else if len(dynamicFlags) > 0 {
+		schema, err := getToolSchema(serverName, toolName)
+		if err != nil {
+			// No cached schema — pass all values as strings.
+			for k, v := range dynamicFlags {
+				params[k] = v
+			}
+		} else {
+			coerced, err := coerceDynamicFlags(dynamicFlags, schema)
+			if err != nil {
+				return err
+			}
+			params = coerced
 		}
 	}
 
@@ -188,6 +228,86 @@ func renderToolCallResult(result toolCallResult) callOutput {
 		Content: strings.Join(parts, "\n"),
 		IsError: result.IsError,
 	}
+}
+
+// showToolHelp prints help for a specific tool, including its description and parameters.
+func showToolHelp(serverName, toolName string) error {
+	server, err := getServerConfig(serverName)
+	if err != nil {
+		return err
+	}
+
+	tools, err := getToolsForServer(server, false)
+	if err != nil {
+		return fmt.Errorf("cannot discover tools: %w", err)
+	}
+
+	var found *toolOutput
+	for _, t := range tools {
+		if t.Name == toolName {
+			found = &t
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("tool %q not found on server %q", toolName, serverName)
+	}
+
+	desc := found.Description
+	if desc == "" {
+		desc = "(no description)"
+	}
+	fmt.Fprintf(os.Stderr, "%s — %s\n", toolName, desc)
+	fmt.Fprintf(os.Stderr, "  server: %s\n", serverName)
+
+	params := parseInputSchema(found.InputSchema)
+	if len(params) == 0 {
+		fmt.Fprintln(os.Stderr, "\nNo parameters.")
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, "\nParameters:")
+
+	// Calculate max flag width for alignment.
+	maxWidth := 0
+	for _, p := range params {
+		w := len(p.Name)
+		if p.Type != "boolean" {
+			w += len(p.Type) + 3 // " <type>"
+		}
+		if w > maxWidth {
+			maxWidth = w
+		}
+	}
+
+	for _, p := range params {
+		flag := "--" + p.Name
+		if p.Type != "boolean" {
+			flag += " <" + p.Type + ">"
+		}
+
+		var annotations []string
+		if p.Required {
+			annotations = append(annotations, "required")
+		}
+		if p.Default != nil {
+			annotations = append(annotations, fmt.Sprintf("default: %v", p.Default))
+		}
+		if len(p.Enum) > 0 {
+			annotations = append(annotations, fmt.Sprintf("one of: %s", strings.Join(p.Enum, ", ")))
+		}
+
+		line := fmt.Sprintf("  %-*s", maxWidth+4, flag)
+		if p.Description != "" {
+			line += "  " + p.Description
+		}
+		if len(annotations) > 0 {
+			line += " (" + strings.Join(annotations, ", ") + ")"
+		}
+		fmt.Fprintln(os.Stderr, line)
+	}
+
+	return nil
 }
 
 // executeToolCall sends a tools/call request and returns the output.
