@@ -352,6 +352,14 @@ func printToolsHuman(tools []toolOutput) error {
 		return nil
 	}
 
+	// Find max tool name length for alignment.
+	maxNameLen := 0
+	for _, t := range tools {
+		if len(t.Name) > maxNameLen {
+			maxNameLen = len(t.Name)
+		}
+	}
+
 	// Print tools grouped by server (already sorted by server, then name).
 	lastServer := ""
 	serverCount := 0
@@ -374,10 +382,16 @@ func printToolsHuman(tools []toolOutput) error {
 			fmt.Fprintf(os.Stdout, "%s (%d %s)\n", t.Server, serverCount, noun)
 			lastServer = t.Server
 		}
-		if t.Description != "" {
-			fmt.Fprintf(os.Stdout, "  %-30s  %s\n", t.Name, t.Description)
-		} else {
+		if t.Description == "" {
 			fmt.Fprintf(os.Stdout, "  %s\n", t.Name)
+		} else {
+			// Indent continuation lines to align with the description column.
+			pad := strings.Repeat(" ", 2+maxNameLen+2)
+			lines := strings.Split(t.Description, "\n")
+			fmt.Fprintf(os.Stdout, "  %-*s  %s\n", maxNameLen, t.Name, lines[0])
+			for _, line := range lines[1:] {
+				fmt.Fprintf(os.Stdout, "%s%s\n", pad, line)
+			}
 		}
 	}
 
