@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -236,9 +237,9 @@ func refreshTokenWithLock(name string, tokens *AuthTokens) (*AuthTokens, error) 
 // cmdTools handles the `mcp tools` command.
 func cmdTools(args []string) error {
 	var serverFilter, query string
-	var refresh bool
+	var refresh, jsonOutput bool
 
-	// Parse args: mcp tools [server] [--query <search>] [--refresh]
+	// Parse args: mcp tools [server] [--query <search>] [--refresh] [--json]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--query", "-q":
@@ -249,6 +250,8 @@ func cmdTools(args []string) error {
 			query = args[i]
 		case "--refresh":
 			refresh = true
+		case "--json":
+			jsonOutput = true
 		default:
 			if serverFilter == "" {
 				serverFilter = args[i]
@@ -326,5 +329,71 @@ func cmdTools(args []string) error {
 		allTools = []toolOutput{}
 	}
 
-	return outputJSON(allTools)
+	// Default to human-readable for TTY, JSON for pipes.
+	if jsonOutput || !isStdoutTTY() {
+		return outputJSON(allTools)
+	}
+	return printToolsHuman(allTools)
+}
+
+// isStdoutTTY returns true if stdout is a terminal.
+func isStdoutTTY() bool {
+	stat, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+// printToolsHuman formats tools as CLI-style help text grouped by server.
+func printToolsHuman(tools []toolOutput) error {
+	if len(tools) == 0 {
+		fmt.Fprintln(os.Stderr, "No tools found.")
+		return nil
+	}
+
+	// Find max tool name length for alignment.
+	maxNameLen := 0
+	for _, t := range tools {
+		if len(t.Name) > maxNameLen {
+			maxNameLen = len(t.Name)
+		}
+	}
+
+	// Print tools grouped by server (already sorted by server, then name).
+	lastServer := ""
+	serverCount := 0
+	for _, t := range tools {
+		if t.Server != lastServer {
+			if lastServer != "" {
+				fmt.Fprintln(os.Stdout)
+			}
+			// Count tools for this server.
+			serverCount = 0
+			for _, u := range tools {
+				if u.Server == t.Server {
+					serverCount++
+				}
+			}
+			noun := "tools"
+			if serverCount == 1 {
+				noun = "tool"
+			}
+			fmt.Fprintf(os.Stdout, "%s (%d %s)\n", t.Server, serverCount, noun)
+			lastServer = t.Server
+		}
+		if t.Description == "" {
+			fmt.Fprintf(os.Stdout, "  %s\n", t.Name)
+		} else {
+			// Indent continuation lines to align with the description column.
+			pad := strings.Repeat(" ", 2+maxNameLen+2)
+			lines := strings.Split(t.Description, "\n")
+			fmt.Fprintf(os.Stdout, "  %-*s  %s\n", maxNameLen, t.Name, lines[0])
+			for _, line := range lines[1:] {
+				fmt.Fprintf(os.Stdout, "%s%s\n", pad, line)
+			}
+		}
+	}
+
+	return nil
 }
