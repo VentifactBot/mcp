@@ -31,6 +31,12 @@ func cmdCall(args []string) error {
 	if err := validateServerName(serverName); err != nil {
 		return err
 	}
+
+	// `mcp call <server> --help` lists all tools for the server.
+	if args[1] == "--help" || args[1] == "-h" {
+		return cmdTools([]string{serverName})
+	}
+
 	toolName := args[1]
 	if err := validateToolName(toolName); err != nil {
 		return err
