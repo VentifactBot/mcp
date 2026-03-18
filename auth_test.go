@@ -270,9 +270,9 @@ func TestCmdAuth_TLSEnforcement(t *testing.T) {
 	}
 }
 
-func TestBuildRelayRedirectURI_IncludesTimestamp(t *testing.T) {
+func TestBuildRelayRedirectURI_IncludesNonceAndTimestamp(t *testing.T) {
 	before := time.Now().Unix()
-	uri := buildRelayRedirectURI("https://example.com", "agent-id", "nonce-abc")
+	uri := buildRelayRedirectURI("https://example.com/callback", "nonce-abc")
 	after := time.Now().Unix()
 
 	parsed, err := url.Parse(uri)
@@ -280,9 +280,14 @@ func TestBuildRelayRedirectURI_IncludesTimestamp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Check path structure
-	if parsed.Path != "/api/oauth/relay/agent-id/nonce-abc/callback" {
+	// Path should be unchanged from the callback URL
+	if parsed.Path != "/callback" {
 		t.Errorf("unexpected path: %s", parsed.Path)
+	}
+
+	// Check nonce param
+	if parsed.Query().Get("nonce") != "nonce-abc" {
+		t.Errorf("expected nonce=nonce-abc, got %q", parsed.Query().Get("nonce"))
 	}
 
 	// Check timestamp param

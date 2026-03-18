@@ -93,7 +93,7 @@ mcp call server list --params '{}' | jq '.content' | ...
 
 ## Notes
 
-- `MCP_AGENT_ID` and `MCP_CALLBACK_URL` are pre-configured in `~/.bashrc` — no need to pass `--agent-id` or `--callback-url` flags manually.
+- `MCP_CALLBACK_URL` is pre-configured in `~/.bashrc` — no need to pass `--callback-url` manually.
 - Tool call results are JSON: `{"content": "...", "isError": false}`
 - Exit code 0 = success, 1 = error
 - Logs and progress go to stderr, data to stdout

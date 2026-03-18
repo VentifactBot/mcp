@@ -12,7 +12,7 @@ import (
 )
 
 // localOAuthFlow runs the full OAuth flow with a localhost callback server.
-// Used when running locally (not on sprites).
+// Used when running locally (not in relay mode).
 // The caller must provide an already-listening net.Listener so that the real
 // port is known before OAuth client registration.
 func localOAuthFlow(

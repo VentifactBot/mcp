@@ -92,16 +92,14 @@ Tools flags:
   --json                         Output as JSON (default: human-readable)
 
 Auth flags:
-  --callback-url <url>           Use relay mode (for sprites)
-  --agent-id <id>                Agent ID for relay callbacks
+  --callback-url <url>           Use relay mode
 
 Environment:
   MCP_AUTH_TOKEN               Bearer token (use instead of OAuth flow)
   MCP_AUTH_CODE                Authorization code (set by gateway for auth-callback)
   MCP_CLIENT_ID                OAuth client ID (for static client credentials)
   MCP_CLIENT_SECRET            OAuth client secret (for static client credentials)
-  MCP_CALLBACK_URL             Default callback URL for relay mode
-  MCP_AGENT_ID                 Default agent ID for relay mode`)
+  MCP_CALLBACK_URL             Default callback URL for relay mode`)
 }
 
 // cmdServers handles the `mcp servers` command.

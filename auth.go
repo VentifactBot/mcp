@@ -77,7 +77,7 @@ func cmdAuth(args []string) error {
 	cleanupExpiredPendingAuth()
 
 	if len(args) < 1 {
-		return fmt.Errorf("usage: mcp auth <name> [--callback-url <url>] [--agent-id <id>]")
+		return fmt.Errorf("usage: mcp auth <name> [--callback-url <url>]")
 	}
 
 	name := args[0]
@@ -85,7 +85,7 @@ func cmdAuth(args []string) error {
 		return err
 	}
 
-	var callbackURL, agentID string
+	var callbackURL string
 
 	// Parse flags
 	for i := 1; i < len(args); i++ {
@@ -96,12 +96,6 @@ func cmdAuth(args []string) error {
 			}
 			i++
 			callbackURL = args[i]
-		case "--agent-id":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--agent-id requires a value")
-			}
-			i++
-			agentID = args[i]
 		}
 	}
 
@@ -110,12 +104,9 @@ func cmdAuth(args []string) error {
 	clientID := os.Getenv("MCP_CLIENT_ID")
 	clientSecret := os.Getenv("MCP_CLIENT_SECRET")
 
-	// Env var fallbacks for flags
+	// Env var fallback for flags
 	if callbackURL == "" {
 		callbackURL = os.Getenv("MCP_CALLBACK_URL")
-	}
-	if agentID == "" {
-		agentID = os.Getenv("MCP_AGENT_ID")
 	}
 
 	// Manual token mode
@@ -156,13 +147,10 @@ func cmdAuth(args []string) error {
 	var redirectURI string
 	var localListener net.Listener
 	if callbackURL != "" {
-		if agentID == "" {
-			return fmt.Errorf("--agent-id (or MCP_AGENT_ID) is required for relay mode")
-		}
 		if err := validateEndpointURL(callbackURL, "callback URL"); err != nil {
 			return err
 		}
-		redirectURI = buildRelayRedirectURI(callbackURL, agentID, nonce)
+		redirectURI = buildRelayRedirectURI(callbackURL, nonce)
 	} else {
 		// Start listener now so we know the real port for registration
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -237,7 +225,7 @@ func cmdAuth(args []string) error {
 }
 
 // cmdAuthCallback handles `mcp auth-callback --nonce <nonce> --code <code>`.
-// Called by the gateway on the sprite after receiving the OAuth callback.
+// Called after receiving the OAuth callback in relay mode.
 func cmdAuthCallback(args []string) error {
 	cleanupExpiredPendingAuth()
 
@@ -551,11 +539,15 @@ func refreshOAuthToken(tokens *AuthTokens) (*AuthTokens, error) {
 }
 
 // buildRelayRedirectURI constructs the relay OAuth callback URL.
-// Embeds a creation timestamp so the relay can reject expired links.
-func buildRelayRedirectURI(callbackURL, agentID, nonce string) string {
+// Appends nonce and timestamp as query parameters to the user's callback URL.
+func buildRelayRedirectURI(callbackURL, nonce string) string {
 	t := time.Now().Unix()
-	return fmt.Sprintf("%s/api/oauth/relay/%s/%s/callback?t=%d",
-		strings.TrimRight(callbackURL, "/"), agentID, nonce, t)
+	u, _ := url.Parse(callbackURL) // guaranteed valid by validateEndpointURL
+	q := u.Query()
+	q.Set("nonce", nonce)
+	q.Set("t", fmt.Sprintf("%d", t))
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // fetchWellKnown GETs a well-known URL and returns the body on 200, or an error.
